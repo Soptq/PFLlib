@@ -62,7 +62,16 @@ class Server(object):
 
         self.rs_test_acc = []
         self.rs_test_auc = []
+        self.rs_test_pre = []
+        self.rs_test_rec = []
+        self.rs_test_confidence = []
         self.rs_train_loss = []
+
+        self.client_test_acc = [[] for _ in range(self.num_clients)]
+        self.client_test_auc = [[] for _ in range(self.num_clients)]
+        self.client_test_pre = [[] for _ in range(self.num_clients)]
+        self.client_test_rec = [[] for _ in range(self.num_clients)]
+        self.client_test_confidence = [[] for _ in range(self.num_clients)]
 
         self.times = times
         self.eval_gap = args.eval_gap
@@ -197,7 +206,15 @@ class Server(object):
             with h5py.File(file_path, 'w') as hf:
                 hf.create_dataset('rs_test_acc', data=self.rs_test_acc)
                 hf.create_dataset('rs_test_auc', data=self.rs_test_auc)
+                hf.create_dataset('rs_test_pre', data=self.rs_test_pre)
+                hf.create_dataset('rs_test_rec', data=self.rs_test_rec)
                 hf.create_dataset('rs_train_loss', data=self.rs_train_loss)
+                hf.create_dataset('rs_test_confidence', data=self.rs_test_confidence)
+                hf.create_dataset('client_test_acc', data=self.client_test_acc)
+                hf.create_dataset('client_test_auc', data=self.client_test_auc)
+                hf.create_dataset('client_test_pre', data=self.client_test_pre)
+                hf.create_dataset('client_test_rec', data=self.client_test_rec)
+                hf.create_dataset('client_test_confidence', data=self.client_test_confidence)
 
     def save_item(self, item, item_name):
         if not os.path.exists(self.save_folder_name):
@@ -215,15 +232,32 @@ class Server(object):
         num_samples = []
         tot_correct = []
         tot_auc = []
+        tot_pre = []
+        tot_rec = []
+        tot_cfd = [0. for _ in range(self.num_classes)]
+        tot_n_cls = [0 for _ in range(self.num_classes)]
         for c in self.clients:
-            ct, ns, auc = c.test_metrics()
+            ct, ns, auc, pre, rec, cfd, n_cls = c.test_metrics()
             tot_correct.append(ct*1.0)
             tot_auc.append(auc*ns)
+            tot_pre.append(pre*ns)
+            tot_rec.append(rec*ns)
             num_samples.append(ns)
 
-        ids = [c.id for c in self.clients]
+            tot_cfd = [_tot_cfd + _cfd for _tot_cfd, _cfd in zip(tot_cfd, cfd)]
+            tot_n_cls = [_tot_n_cls + _n_cls for _tot_n_cls, _n_cls in zip(tot_n_cls, n_cls)]
+            local_confidence = [_cfd / _n_cls if _n_cls != 0 else 0. for _cfd, _n_cls in zip(cfd, n_cls)]
 
-        return ids, num_samples, tot_correct, tot_auc
+            self.client_test_acc[c.id].append(ct / ns)
+            self.client_test_auc[c.id].append(auc)
+            self.client_test_pre[c.id].append(pre)
+            self.client_test_rec[c.id].append(rec)
+            self.client_test_confidence[c.id].append(local_confidence)
+
+        ids = [c.id for c in self.clients]
+        confidence = [cfd / n_cls if n_cls != 0 else 0. for cfd, n_cls in zip(tot_cfd, tot_n_cls)]
+
+        return ids, num_samples, tot_correct, tot_auc, tot_pre, tot_rec, confidence
 
     def train_metrics(self):
         if self.eval_new_clients and self.num_new_clients > 0:
@@ -247,26 +281,37 @@ class Server(object):
 
         test_acc = sum(stats[2])*1.0 / sum(stats[1])
         test_auc = sum(stats[3])*1.0 / sum(stats[1])
+        test_pre = sum(stats[4])*1.0 / sum(stats[1])
+        test_rec = sum(stats[5])*1.0 / sum(stats[1])
         train_loss = sum(stats_train[2])*1.0 / sum(stats_train[1])
         accs = [a / n for a, n in zip(stats[2], stats[1])]
         aucs = [a / n for a, n in zip(stats[3], stats[1])]
         
-        if acc == None:
-            self.rs_test_acc.append(test_acc)
-        else:
-            acc.append(test_acc)
-        
-        if loss == None:
-            self.rs_train_loss.append(train_loss)
-        else:
-            loss.append(train_loss)
+        # if acc == None:
+        #     self.rs_test_acc.append(test_acc)
+        # else:
+        #     acc.append(test_acc)
+        #
+        # if loss == None:
+        #     self.rs_train_loss.append(train_loss)
+        # else:
+        #     loss.append(train_loss)
+
+        self.rs_test_acc.append(test_acc)
+        self.rs_train_loss.append(train_loss)
+        self.rs_test_auc.append(test_auc)
+        self.rs_test_pre.append(test_pre)
+        self.rs_test_rec.append(test_rec)
+        self.rs_test_confidence.append(stats[6])
 
         print("Averaged Train Loss: {:.4f}".format(train_loss))
         print("Averaged Test Accurancy: {:.4f}".format(test_acc))
         print("Averaged Test AUC: {:.4f}".format(test_auc))
+        print("Averaged Test Precision: {:.4f}".format(test_pre))
+        print("Averaged Test Recall: {:.4f}".format(test_rec))
         # self.print_(test_acc, train_acc, train_loss)
-        print("Std Test Accurancy: {:.4f}".format(np.std(accs)))
-        print("Std Test AUC: {:.4f}".format(np.std(aucs)))
+        # print("Std Test Accurancy: {:.4f}".format(np.std(accs)))
+        # print("Std Test AUC: {:.4f}".format(np.std(aucs)))
 
     def print_(self, test_acc, test_auc, train_loss):
         print("Average Test Accurancy: {:.4f}".format(test_acc))

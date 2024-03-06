@@ -103,6 +103,8 @@ class Client(object):
 
         test_acc = 0
         test_num = 0
+        confidence_per_class = np.array([0. for _ in range(self.num_classes)])
+        num_per_class = np.array([0 for _ in range(self.num_classes)])
         y_prob = []
         y_true = []
         
@@ -115,6 +117,10 @@ class Client(object):
                 y = y.to(self.device)
                 output = self.model(x)
 
+                for cls in range(self.num_classes):
+                    idx = y == cls
+                    confidence_per_class[cls] += torch.sum(torch.softmax(output, dim=1)[:, cls][idx]).item()
+                    num_per_class[cls] += torch.sum(idx).item()
                 test_acc += (torch.sum(torch.argmax(output, dim=1) == y)).item()
                 test_num += y.shape[0]
 
@@ -134,8 +140,10 @@ class Client(object):
         y_true = np.concatenate(y_true, axis=0)
 
         auc = metrics.roc_auc_score(y_true, y_prob, average='micro')
-        
-        return test_acc, test_num, auc
+        precision = metrics.average_precision_score(y_true, y_prob, average='micro')
+        recall = metrics.recall_score(np.argmax(y_true, axis=1), np.argmax(y_prob, axis=1), average='micro')
+
+        return test_acc, test_num, auc, precision, recall, confidence_per_class.tolist(), num_per_class.tolist()
 
     def train_metrics(self):
         trainloader = self.load_train_data()
