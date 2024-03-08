@@ -61,6 +61,7 @@ from flcore.servers.servergpfl import GPFL
 from flcore.servers.serverntd import FedNTD
 from flcore.servers.servergh import FedGH
 from flcore.servers.serveravgDBE import FedAvgDBE
+from flcore.servers.serverpfedsd import pFedSD
 
 from flcore.trainmodel.models import *
 
@@ -351,7 +352,10 @@ def run(args):
             args.model.fc = nn.Identity()
             args.model = BaseHeadSplit(args.model, args.head)
             server = FedAvgDBE(args, i)
-            
+
+        elif args.algorithm == "pFedSD":
+            server = pFedSD(args, i)
+
         else:
             raise NotImplementedError
 
@@ -475,6 +479,9 @@ if __name__ == "__main__":
     # FedAvgDBE
     parser.add_argument('-mo', "--momentum", type=float, default=0.1)
     parser.add_argument('-klw', "--kl_weight", type=float, default=0.0)
+
+    # pFedSD
+    parser.add_argument("--T", type=float, default=1.0, help="temperature in KL loss")
 
 
     args = parser.parse_args()
