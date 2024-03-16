@@ -24,7 +24,7 @@ import time
 import random
 from utils.data_utils import read_client_data
 from utils.dlg import DLG
-
+from torch.utils.data import DataLoader
 
 class Server(object):
     def __init__(self, args, times):
@@ -72,6 +72,18 @@ class Server(object):
         self.client_test_pre = [[] for _ in range(self.num_clients)]
         self.client_test_rec = [[] for _ in range(self.num_clients)]
         self.client_test_confidence = [[] for _ in range(self.num_clients)]
+
+        self.rs_test_acc_global = []
+        self.rs_test_auc_global = []
+        self.rs_test_pre_global = []
+        self.rs_test_rec_global = []
+        self.rs_test_confidence_global = []
+
+        self.client_test_acc_global = [[] for _ in range(self.num_clients)]
+        self.client_test_auc_global = [[] for _ in range(self.num_clients)]
+        self.client_test_pre_global = [[] for _ in range(self.num_clients)]
+        self.client_test_rec_global = [[] for _ in range(self.num_clients)]
+        self.client_test_confidence_global = [[] for _ in range(self.num_clients)]
 
         self.times = times
         self.eval_gap = args.eval_gap
@@ -216,6 +228,18 @@ class Server(object):
                 hf.create_dataset('client_test_rec', data=self.client_test_rec)
                 hf.create_dataset('client_test_confidence', data=self.client_test_confidence)
 
+                hf.create_dataset('rs_test_acc_global', data=self.rs_test_acc_global)
+                hf.create_dataset('rs_test_auc_global', data=self.rs_test_auc_global)
+                hf.create_dataset('rs_test_pre_global', data=self.rs_test_pre_global)
+                hf.create_dataset('rs_test_rec_global', data=self.rs_test_rec_global)
+                hf.create_dataset('rs_test_confidence_global', data=self.rs_test_confidence_global)
+                hf.create_dataset('client_test_acc_global', data=self.client_test_acc_global)
+                hf.create_dataset('client_test_auc_global', data=self.client_test_auc_global)
+                hf.create_dataset('client_test_pre_global', data=self.client_test_pre_global)
+                hf.create_dataset('client_test_rec_global', data=self.client_test_rec_global)
+                hf.create_dataset('client_test_confidence_global', data=self.client_test_confidence_global)
+
+
     def save_item(self, item, item_name):
         if not os.path.exists(self.save_folder_name):
             os.makedirs(self.save_folder_name)
@@ -253,6 +277,47 @@ class Server(object):
             self.client_test_pre[c.id].append(pre)
             self.client_test_rec[c.id].append(rec)
             self.client_test_confidence[c.id].append(local_confidence)
+
+        ids = [c.id for c in self.clients]
+        confidence = [cfd / n_cls if n_cls != 0 else 0. for cfd, n_cls in zip(tot_cfd, tot_n_cls)]
+
+        return ids, num_samples, tot_correct, tot_auc, tot_pre, tot_rec, confidence
+
+    def load_global_test_data(self, batch_size=None):
+        if batch_size == None:
+            batch_size = self.batch_size
+        test_data = []
+        for c in self.clients:
+            test_data_client = read_client_data(self.dataset, c.id, is_train=False)
+            test_data.extend(test_data_client)
+        return DataLoader(test_data, batch_size=batch_size, shuffle=True)
+
+    def test_metrics_global(self):
+        num_samples = []
+        tot_correct = []
+        tot_auc = []
+        tot_pre = []
+        tot_rec = []
+        tot_cfd = [0. for _ in range(self.num_classes)]
+        tot_n_cls = [0 for _ in range(self.num_classes)]
+        testloaderfull = self.load_global_test_data()
+        for c in self.clients:
+            ct, ns, auc, pre, rec, cfd, n_cls = c.test_metrics_global(testloaderfull)
+            tot_correct.append(ct*1.0)
+            tot_auc.append(auc*ns)
+            tot_pre.append(pre*ns)
+            tot_rec.append(rec*ns)
+            num_samples.append(ns)
+
+            tot_cfd = [_tot_cfd + _cfd for _tot_cfd, _cfd in zip(tot_cfd, cfd)]
+            tot_n_cls = [_tot_n_cls + _n_cls for _tot_n_cls, _n_cls in zip(tot_n_cls, n_cls)]
+            local_confidence = [_cfd / _n_cls if _n_cls != 0 else 0. for _cfd, _n_cls in zip(cfd, n_cls)]
+
+            self.client_test_acc_global[c.id].append(ct / ns)
+            self.client_test_auc_global[c.id].append(auc)
+            self.client_test_pre_global[c.id].append(pre)
+            self.client_test_rec_global[c.id].append(rec)
+            self.client_test_confidence_global[c.id].append(local_confidence)
 
         ids = [c.id for c in self.clients]
         confidence = [cfd / n_cls if n_cls != 0 else 0. for cfd, n_cls in zip(tot_cfd, tot_n_cls)]
@@ -312,6 +377,27 @@ class Server(object):
         # self.print_(test_acc, train_acc, train_loss)
         # print("Std Test Accurancy: {:.4f}".format(np.std(accs)))
         # print("Std Test AUC: {:.4f}".format(np.std(aucs)))
+
+    def evaluate_global(self, acc=None, loss=None):
+        stats = self.test_metrics_global()
+
+        test_acc = sum(stats[2]) * 1.0 / sum(stats[1])
+        test_auc = sum(stats[3]) * 1.0 / sum(stats[1])
+        test_pre = sum(stats[4]) * 1.0 / sum(stats[1])
+        test_rec = sum(stats[5]) * 1.0 / sum(stats[1])
+        accs = [a / n for a, n in zip(stats[2], stats[1])]
+        aucs = [a / n for a, n in zip(stats[3], stats[1])]
+
+        self.rs_test_acc_global.append(test_acc)
+        self.rs_test_auc_global.append(test_auc)
+        self.rs_test_pre_global.append(test_pre)
+        self.rs_test_rec_global.append(test_rec)
+        self.rs_test_confidence_global.append(stats[6])
+
+        print("Averaged Global Test Accurancy: {:.4f}".format(test_acc))
+        print("Averaged Global Test AUC: {:.4f}".format(test_auc))
+        print("Averaged Global Test Precision: {:.4f}".format(test_pre))
+        print("Averaged Global Test Recall: {:.4f}".format(test_rec))
 
     def print_(self, test_acc, test_auc, train_loss):
         print("Average Test Accurancy: {:.4f}".format(test_acc))
