@@ -54,6 +54,7 @@ class pFedSD(Server):
                 print(f"\n-------------Round number: {i}-------------")
                 print("\nEvaluate personalized model")
                 self.evaluate()
+                self.evaluate_global()
 
 
 

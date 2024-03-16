@@ -81,7 +81,6 @@ class Client(object):
             batch_size = self.batch_size
         test_data = read_client_data(self.dataset, self.id, is_train=False)
         return DataLoader(test_data, batch_size, drop_last=False, shuffle=True)
-        
     def set_parameters(self, model):
         for new_param, old_param in zip(model.parameters(), self.model.parameters()):
             old_param.data = new_param.data.clone()
@@ -94,6 +93,54 @@ class Client(object):
     def update_parameters(self, model, new_params):
         for param, new_param in zip(model.parameters(), new_params):
             param.data = new_param.data.clone()
+
+    def test_metrics_global(self, testloaderfull):
+        self.model.eval()
+
+        test_acc = 0
+        test_num = 0
+        confidence_per_class = np.array([0. for _ in range(self.num_classes)])
+        num_per_class = np.array([0 for _ in range(self.num_classes)])
+        y_prob = []
+        y_true = []
+
+        with torch.no_grad():
+            for x, y in testloaderfull:
+                if type(x) == type([]):
+                    x[0] = x[0].to(self.device)
+                else:
+                    x = x.to(self.device)
+                y = y.to(self.device)
+                output = self.model(x)
+
+                for cls in range(self.num_classes):
+                    idx = y == cls
+                    confidence_per_class[cls] += torch.sum(torch.softmax(output, dim=1)[:, cls][idx]).item()
+                    num_per_class[cls] += torch.sum(idx).item()
+                test_acc += (torch.sum(torch.argmax(output, dim=1) == y)).item()
+                test_num += y.shape[0]
+
+                y_prob.append(output.detach().cpu().numpy())
+                nc = self.num_classes
+                if self.num_classes == 2:
+                    nc += 1
+                lb = label_binarize(y.detach().cpu().numpy(), classes=np.arange(nc))
+                if self.num_classes == 2:
+                    lb = lb[:, :2]
+                y_true.append(lb)
+
+        # self.model.cpu()
+        # self.save_model(self.model, 'model')
+
+        y_prob = np.concatenate(y_prob, axis=0)
+        y_true = np.concatenate(y_true, axis=0)
+
+        auc = metrics.roc_auc_score(y_true, y_prob, average='micro')
+        precision = metrics.average_precision_score(y_true, y_prob, average='micro')
+        recall = metrics.recall_score(np.argmax(y_true, axis=1), np.argmax(y_prob, axis=1), average='micro')
+
+        return test_acc, test_num, auc, precision, recall, confidence_per_class.tolist(), num_per_class.tolist()
+
 
     def test_metrics(self):
         testloaderfull = self.load_test_data()
